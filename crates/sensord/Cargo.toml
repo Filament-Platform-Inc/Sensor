@@ -1,0 +1,10 @@
+[package]
+name = "sensord"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sensor-core = { path = "../sensor-core" }
+anyhow.workspace = true
+evdev.workspace = true
