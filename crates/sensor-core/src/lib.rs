@@ -8,3 +8,4 @@ pub const APP_NAME: &str = "sensor";
 pub mod audio;
 pub mod hotkey;
 pub mod output;
+pub mod stt;

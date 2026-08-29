@@ -9,3 +9,4 @@ anyhow.workspace = true
 evdev.workspace = true
 cpal.workspace = true
 hound.workspace = true
+whisper-rs = "0.16.0"
