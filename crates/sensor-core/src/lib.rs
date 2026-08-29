@@ -5,4 +5,6 @@
 /// this constant plus packaging rather than the whole tree.
 pub const APP_NAME: &str = "sensor";
 
+pub mod audio;
+pub mod hotkey;
 pub mod output;

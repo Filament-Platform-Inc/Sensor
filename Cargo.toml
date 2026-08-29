@@ -10,3 +10,5 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1"
 evdev = "0.12"
+cpal = "0.15"
+hound = "3"
