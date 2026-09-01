@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/sensord", "crates/sensorctl", "crates/sensor-core"]
+members = [
+    "crates/sensord",
+    "crates/sensorctl",
+    "crates/sensor-core",
+    "crates/sensor-gui",
+]
 
 [workspace.package]
 version = "0.1.0"

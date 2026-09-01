@@ -26,6 +26,9 @@ pub struct Config {
     /// Terminals need Ctrl+Shift+V; there is no reliable way to detect the
     /// focused app under Wayland, so this stays a user choice.
     pub paste_shift: bool,
+    /// Microphone by cpal name; `None` means the system default. Stored by
+    /// name because device order changes across reboots and hotplug.
+    pub microphone: Option<String>,
 }
 
 impl Default for Config {
@@ -34,6 +37,7 @@ impl Default for Config {
             hotkey: DEFAULT_HOTKEY,
             model: None,
             paste_shift: false,
+            microphone: None,
         }
     }
 }
@@ -68,6 +72,9 @@ impl Config {
                         .with_context(|| format!("line {}: no such key {value:?}", n + 1))?
                 }
                 "model" => cfg.model = Some(PathBuf::from(value)),
+                "microphone" => {
+                    cfg.microphone = (value != "default").then(|| value.to_string());
+                }
                 "paste_shift" => {
                     cfg.paste_shift = match value {
                         "true" => true,
@@ -139,10 +146,19 @@ mod tests {
 
     #[test]
     fn parses_each_setting() {
-        let cfg = Config::parse("hotkey = F12\nmodel = /tmp/m.bin\npaste_shift = true").unwrap();
+        let cfg = Config::parse(
+            "hotkey = F12\nmodel = /tmp/m.bin\npaste_shift = true\nmicrophone = pipewire",
+        )
+        .unwrap();
         assert_eq!(cfg.hotkey, Key::KEY_F12);
         assert_eq!(cfg.model, Some(PathBuf::from("/tmp/m.bin")));
         assert!(cfg.paste_shift);
+        assert_eq!(cfg.microphone.as_deref(), Some("pipewire"));
+        // "default" is spelled out in the file but means "no preference".
+        assert_eq!(
+            Config::parse("microphone = default").unwrap().microphone,
+            None
+        );
     }
 
     #[test]

@@ -10,11 +10,31 @@ use sensor_core::{
     audio::{self, Recorder},
     config::{self, Config},
     hotkey::{self, HotkeyEvent},
+    ipc,
     output::{Injector, PasteChord},
     stt::Transcriber,
     APP_NAME,
 };
-use std::{path::PathBuf, time::Instant};
+use std::{
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    thread,
+    time::Instant,
+};
+
+/// How many past transcriptions the GUI can show. Memory only -- never
+/// written to disk, and gone when the daemon stops.
+const RECENT_LIMIT: usize = 5;
+
+/// State the socket serves. Shared between the dictation loop and the thread
+/// answering the GUI, hence Arc<Mutex<..>>.
+#[derive(Default)]
+struct Shared {
+    recording: bool,
+    utterances: u64,
+    recent: Vec<String>,
+}
 
 const USAGE: &str = "\
 usage: sensord [MODEL_PATH]
@@ -49,6 +69,10 @@ fn main() -> Result<()> {
     let mut injector = Injector::new(&format!("{APP_NAME}-virtual-keyboard"))?;
     let events = hotkey::watch(key)?;
 
+    let mic_label = cfg.microphone.clone().unwrap_or_else(|| "default".into());
+    let shared = Arc::new(Mutex::new(Shared::default()));
+    serve_status(Arc::clone(&shared), key, &model, &mic_label);
+
     eprintln!("{APP_NAME}: ready — hold {key:?} and speak");
     eprintln!("{APP_NAME}: config at {}", config::config_path()?.display());
 
@@ -57,10 +81,13 @@ fn main() -> Result<()> {
         match event {
             HotkeyEvent::Pressed => {
                 if recording.is_none() {
-                    match Recorder::start() {
+                    match Recorder::start_on(cfg.microphone.as_deref()) {
                         // Capture begins on press, so audio is already buffered
                         // by the time the user stops speaking.
-                        Ok(r) => recording = Some(r),
+                        Ok(r) => {
+                            recording = Some(r);
+                            shared.lock().unwrap().recording = true;
+                        }
                         Err(e) => eprintln!("  capture failed to start: {e:#}"),
                     }
                 }
@@ -69,8 +96,16 @@ fn main() -> Result<()> {
                 let Some(recorder) = recording.take() else {
                     continue;
                 };
-                if let Err(e) = handle_utterance(recorder, &mut stt, &mut injector, chord) {
-                    eprintln!("  {e:#}");
+                shared.lock().unwrap().recording = false;
+                match handle_utterance(recorder, &mut stt, &mut injector, chord) {
+                    Ok(Some(text)) => {
+                        let mut st = shared.lock().unwrap();
+                        st.utterances += 1;
+                        st.recent.insert(0, text);
+                        st.recent.truncate(RECENT_LIMIT);
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("  {e:#}"),
                 }
             }
         }
@@ -83,7 +118,7 @@ fn handle_utterance(
     stt: &mut Transcriber,
     injector: &mut Injector,
     chord: PasteChord,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let released = Instant::now();
     let samples = recorder.finish()?;
     let audio_secs = samples.len() as f32 / audio::TARGET_RATE as f32;
@@ -92,14 +127,14 @@ fn handle_utterance(
     // should produce nothing rather than a hallucinated word.
     if audio_secs < 0.3 {
         eprintln!("  too short ({audio_secs:.2}s), ignoring");
-        return Ok(());
+        return Ok(None);
     }
 
     let text = stt.transcribe(&samples)?;
     let transcribed = Instant::now();
     if text.is_empty() {
         eprintln!("  no speech detected");
-        return Ok(());
+        return Ok(None);
     }
 
     injector.paste(&text, chord)?;
@@ -109,7 +144,48 @@ fn handle_utterance(
         (transcribed - released).as_millis(),
         transcribed.elapsed().as_millis(),
     );
-    Ok(())
+    Ok(Some(text))
+}
+
+/// Answers status queries on the unix socket, one connection at a time.
+/// Failure to bind is not fatal: dictation must keep working even if the GUI
+/// cannot attach.
+fn serve_status(shared: Arc<Mutex<Shared>>, key: Key, model: &std::path::Path, mic: &str) {
+    let listener = match ipc::listen() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{APP_NAME}: status socket unavailable: {e:#}");
+            return;
+        }
+    };
+    let hotkey = format!("{key:?}");
+    let model = model
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mic = mic.to_string();
+
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            if ipc::read_request(&stream).unwrap_or_default() != "status" {
+                continue;
+            }
+            let status = {
+                let st = shared.lock().unwrap();
+                ipc::Status {
+                    running: true,
+                    hotkey: hotkey.clone(),
+                    model: model.clone(),
+                    microphone: mic.clone(),
+                    recording: st.recording,
+                    utterances: st.utterances,
+                    recent: st.recent.clone(),
+                }
+            };
+            let mut stream = stream;
+            let _ = stream.write_all(status.encode().as_bytes());
+        }
+    });
 }
 
 /// Hotkey: `SENSOR_HOTKEY` overrides the config file, which defaults to

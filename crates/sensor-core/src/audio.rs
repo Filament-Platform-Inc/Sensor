@@ -10,6 +10,50 @@ use std::sync::{Arc, Mutex};
 
 pub const TARGET_RATE: u32 = 16_000;
 
+/// An input the user could plausibly choose.
+pub struct InputDevice {
+    /// What cpal calls it; what gets saved to config.
+    pub id: String,
+    /// What to show a person.
+    pub label: String,
+    pub is_default: bool,
+}
+
+/// Input devices worth offering, with the default marked.
+///
+/// The wrong microphone is the most likely cause of "it recorded silence",
+/// and it is invisible without a way to see what was chosen. ALSA exposes the
+/// same hardware many times over -- raw `hw:`, `plughw:`, `dsnoop:` and so on
+/// are plumbing, not choices, so they are hidden; PipeWire or PulseAudio sits
+/// in front of them on any modern desktop and handles routing.
+pub fn input_devices() -> Result<Vec<InputDevice>> {
+    let host = cpal::default_host();
+    let default = host.default_input_device().and_then(|d| d.name().ok());
+    let mut out = Vec::new();
+    for dev in host.input_devices().context("listing input devices")? {
+        let Ok(id) = dev.name() else { continue };
+        if id.contains(':') {
+            continue;
+        }
+        let label = match id.as_str() {
+            "default" => "System default".to_string(),
+            "pipewire" => "PipeWire".to_string(),
+            "pulse" => "PulseAudio".to_string(),
+            other => other.to_string(),
+        };
+        let is_default = Some(&id) == default.as_ref();
+        out.push(InputDevice {
+            id,
+            label,
+            is_default,
+        });
+    }
+    if out.is_empty() {
+        anyhow::bail!("no usable microphone found");
+    }
+    Ok(out)
+}
+
 /// Audio accumulated by the capture callback.
 ///
 /// The callback runs on a realtime audio thread owned by the driver, while the
@@ -32,10 +76,25 @@ impl Recorder {
     /// already buffered by the time the user stops speaking. That is most of
     /// the latency budget.
     pub fn start() -> Result<Self> {
+        Self::start_on(None)
+    }
+
+    /// Capture from a named device, or the system default when `None`.
+    ///
+    /// Named rather than indexed: device order is not stable across reboots or
+    /// hotplug, so a saved index would silently point at the wrong microphone.
+    pub fn start_on(preferred: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow!("no input device — is a microphone connected?"))?;
+        let device = match preferred {
+            Some(want) => host
+                .input_devices()
+                .context("listing input devices")?
+                .find(|d| d.name().map(|n| n == want).unwrap_or(false))
+                .ok_or_else(|| anyhow!("microphone {want:?} not found — it may be unplugged"))?,
+            None => host
+                .default_input_device()
+                .ok_or_else(|| anyhow!("no input device — is a microphone connected?"))?,
+        };
         let config = device
             .default_input_config()
             .context("querying default input config")?;
