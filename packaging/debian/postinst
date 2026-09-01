@@ -51,14 +51,9 @@ case "$1" in
 
       cat <<MSG
 
-sensor is installed.
-
-  One step remains: log out and back in, so your new group membership
-  reaches your session. Then run
-
-      sensorctl setup
-
-  to download the speech model and start dictating.
+sensor is installed. Two steps remain:
+  1. Log out and back in, so your group membership reaches your session.
+  2. Run: sensorctl setup
 
 MSG
     fi

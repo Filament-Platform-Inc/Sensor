@@ -5,9 +5,14 @@ Local voice dictation for Linux — including GNOME Wayland, where most
 alternatives don't work at all.
 
 ```
-sudo apt install ./sensor_0.1.0_amd64.deb
+curl -fsSL https://sensor.filamentplatform.com/install.sh | sh
 sensorctl setup
 ```
+
+The script downloads the `.deb` and hands it to `apt` — apt does the
+installing, which is what lets `apt purge` undo it. [Read it first](https://sensor.filamentplatform.com/install.sh)
+if you would rather, or grab the
+[`.deb` directly](https://github.com/Filament-Platform-Inc/Sensor/releases/latest).
 
 Then open **sensor** from your applications, or just hold the key and talk.
 
@@ -93,12 +98,19 @@ Terminals use `Ctrl+Shift+V` rather than `Ctrl+V`. If pasting fails there, set
 
 ## Building from source
 
-Needs a Rust toolchain, `cmake`, and `libasound2-dev`.
+Needs a Rust toolchain, `cmake`, `libasound2-dev`, and `libgtk-4-dev`.
 
 ```
 cargo build --release
-./packaging/build-deb.sh
+./packaging/build-deb.sh          # produces dist/sensor_<version>_amd64.deb
+./packaging/test-install.sh       # install/purge check in a container
 ```
+
+`test-install.sh` needs Docker. It runs 28 checks in a clean Ubuntu 24.04
+container: that every file lands, that the groups are created and joined,
+that both binaries run, and that `apt purge` removes all of it — verified by
+diffing the filesystem against a pre-install snapshot. It also checks that a
+user who was already in `input` keeps that membership afterwards.
 
 ## Status
 
