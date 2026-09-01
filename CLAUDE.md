@@ -15,7 +15,8 @@ So the differentiators are, in order:
 2. **One-command complete uninstall.** This app reads every keystroke; reversibility is what makes
    it feel safe to try. No install scripts — everything through the package manager, `postrm`
    reverses `postinst`.
-3. **Sub-400ms** key-release to text, via a daemon holding the model warm.
+3. **~700ms** key-release to text, via a daemon holding whisper's state warm. (Measured, not
+   aspirational: `tiny.en` p50 is 598ms on the dev machine. The earlier 400ms figure was a guess.)
 
 Judge feature requests against this. Resist transcription features that don't serve it.
 
