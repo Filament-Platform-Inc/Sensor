@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=sensor
+GenericName=Voice Dictation
+Comment=Hold a key, speak, and the text appears in the focused app
+Exec=sensor-gui
+Icon=sensor
+Terminal=false
+Categories=Utility;
+Keywords=voice;dictation;speech;transcribe;microphone;accessibility;
+StartupNotify=true
+StartupWMClass=sensor

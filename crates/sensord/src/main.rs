@@ -5,10 +5,9 @@
 //! whole reason this runs as a daemon rather than a script.
 
 use anyhow::{Context, Result};
-use evdev::Key;
 use sensor_core::{
     audio::{self, Recorder},
-    config::{self, Config},
+    config::{self, Config, Hotkey},
     hotkey::{self, HotkeyEvent},
     ipc,
     output::{Injector, PasteChord},
@@ -44,7 +43,7 @@ Hold the hotkey, speak, release: the text appears in the focused window.
   MODEL_PATH        whisper model to load; overrides config and SENSOR_MODEL
 
 environment:
-  SENSOR_HOTKEY     evdev key name (e.g. RIGHTALT, F12), overrides config
+  SENSOR_HOTKEY     key or chord, e.g. RIGHTALT+DOT or F12; overrides config
   SENSOR_MODEL      model path
 
 Settings live in the config file; run `sensorctl keys` to find a key name.";
@@ -73,7 +72,7 @@ fn main() -> Result<()> {
     let shared = Arc::new(Mutex::new(Shared::default()));
     serve_status(Arc::clone(&shared), key, &model, &mic_label);
 
-    eprintln!("{APP_NAME}: ready — hold {key:?} and speak");
+    eprintln!("{APP_NAME}: ready — hold {} and speak", key.describe());
     eprintln!("{APP_NAME}: config at {}", config::config_path()?.display());
 
     let mut recording: Option<Recorder> = None;
@@ -150,7 +149,7 @@ fn handle_utterance(
 /// Answers status queries on the unix socket, one connection at a time.
 /// Failure to bind is not fatal: dictation must keep working even if the GUI
 /// cannot attach.
-fn serve_status(shared: Arc<Mutex<Shared>>, key: Key, model: &std::path::Path, mic: &str) {
+fn serve_status(shared: Arc<Mutex<Shared>>, key: Hotkey, model: &std::path::Path, mic: &str) {
     let listener = match ipc::listen() {
         Ok(l) => l,
         Err(e) => {
@@ -158,7 +157,7 @@ fn serve_status(shared: Arc<Mutex<Shared>>, key: Key, model: &std::path::Path, m
             return;
         }
     };
-    let hotkey = format!("{key:?}");
+    let hotkey = key.describe();
     let model = model
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -190,12 +189,12 @@ fn serve_status(shared: Arc<Mutex<Shared>>, key: Key, model: &std::path::Path, m
 
 /// Hotkey: `SENSOR_HOTKEY` overrides the config file, which defaults to
 /// right Alt. The env var exists so a key can be tried without editing config.
-fn hotkey(cfg: &Config) -> Result<Key> {
+fn hotkey(cfg: &Config) -> Result<Hotkey> {
     let Some(name) = std::env::var_os("SENSOR_HOTKEY") else {
         return Ok(cfg.hotkey);
     };
     let name = name.to_string_lossy().into_owned();
-    config::key_by_name(&name).with_context(|| format!("SENSOR_HOTKEY: no such key {name:?}"))
+    Hotkey::parse(&name).with_context(|| format!("SENSOR_HOTKEY: no such key {name:?}"))
 }
 
 /// Model location: argument, then env var, then config, then the repo-local dir.

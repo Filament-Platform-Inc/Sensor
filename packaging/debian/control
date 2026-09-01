@@ -4,7 +4,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: Hasnain Syed <hasnain786syed@gmail.com>
-Depends: libc6 (>= 2.38), libgcc-s1 (>= 4.2), libstdc++6 (>= 13), libasound2t64 (>= 1.2.11), wl-clipboard
+Depends: libc6 (>= 2.38), libgcc-s1 (>= 4.2), libstdc++6 (>= 13), libasound2t64 (>= 1.2.11), libgtk-4-1 (>= 4.10), libglib2.0-0t64, wl-clipboard, curl
 Homepage: https://sensor.filamentplatform.com
 Description: Hold a key, speak, text appears in the focused app
  Local voice dictation for Linux. Audio never leaves the machine: speech is

@@ -14,6 +14,7 @@ cargo build --release
 
 install -Dm755 target/release/sensord   "$STAGE/usr/bin/sensord"
 install -Dm755 target/release/sensorctl "$STAGE/usr/bin/sensorctl"
+install -Dm755 target/release/sensor-gui  "$STAGE/usr/bin/sensor-gui"
 
 install -Dm644 packaging/debian/99-sensor.rules \
   "$STAGE/usr/lib/udev/rules.d/99-sensor.rules"
@@ -21,6 +22,13 @@ install -Dm644 packaging/debian/sensor-modules.conf \
   "$STAGE/usr/lib/modules-load.d/sensor.conf"
 install -Dm644 packaging/debian/sensord.service \
   "$STAGE/usr/lib/systemd/user/sensord.service"
+
+install -Dm644 packaging/debian/sensor.desktop \
+  "$STAGE/usr/share/applications/sensor.desktop"
+for size in 16 24 32 48 64 128 256; do
+  install -Dm644 "packaging/icons/sensor-${size}.png" \
+    "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps/sensor.png"
+done
 
 install -Dm644 README.md "$STAGE/usr/share/doc/sensor/README.md"
 install -Dm644 packaging/debian/README.Debian \

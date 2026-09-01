@@ -9,6 +9,8 @@ sudo apt install ./sensor_0.1.0_amd64.deb
 sensorctl setup
 ```
 
+Then open **sensor** from your applications, or just hold the key and talk.
+
 Nothing else. No `git clone`, no Python environment, no manual `sudo chmod`
 on device nodes, no editing udev rules by hand.
 
@@ -26,6 +28,8 @@ exactly what it does before installing it, so:
 | adds you to `input` and `uinput` | required to read the hotkey and type |
 | `~/.local/share/sensor/` | the speech model, downloaded once (~75MB) |
 | `~/.config/sensor/config` | your settings |
+| `/usr/share/applications/sensor.desktop` | the launcher entry |
+| `/usr/share/icons/hicolor/*/apps/sensor.png` | the app icon |
 
 `sudo apt purge sensor` reverses all of it, including the group membership —
 and only the memberships the installer actually added.
@@ -68,11 +72,15 @@ daemon rather than a script.
 
 ## Usage
 
-Hold **Right Alt**, speak, release.
+Hold **Right Alt + `.`**, speak, release.
+
+A chord rather than a single key: a lone modifier gets intercepted by browsers,
+and a lone ordinary key steals a character. `Right Alt + .` collides with
+essentially nothing and is reachable with one hand.
 
 Not every keyboard has the same keys — laptops fold the function row into an
-`Fn` layer, and 2024+ models replaced Right Ctrl with a Copilot key. If the
-default doesn't suit yours:
+`Fn` layer, and 2024+ models replaced Right Ctrl with a Copilot key. Change it
+in the settings window, or:
 
 ```
 sensorctl keys      # press a key, see its name, save it as your hotkey

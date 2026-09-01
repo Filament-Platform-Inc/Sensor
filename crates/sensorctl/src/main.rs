@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use evdev::{Device, InputEventKind, Key};
 use sensor_core::{
-    config::{self, Config},
+    config::{self, Config, Hotkey},
     APP_NAME,
 };
 use std::{
@@ -196,7 +196,7 @@ fn show_config() -> Result<()> {
         println!("  (does not exist yet; these are the defaults)");
     }
     println!();
-    println!("hotkey      = {:?}", cfg.hotkey);
+    println!("hotkey      = {}", cfg.hotkey.describe());
     println!(
         "model       = {}",
         cfg.model
@@ -252,25 +252,23 @@ fn keys() -> Result<()> {
         .find(|k| !is_modifier(*k))
         .unwrap_or(first);
 
-    let name = format!("{key:?}");
-    let short = name.strip_prefix("KEY_").unwrap_or(&name);
-    println!("You pressed: {name}  (code {})", key.code());
+    // A chord is a modifier plus the key that followed it, so holding Right
+    // Alt and then pressing '.' binds the pair rather than just the modifier.
+    let modifier = seen.iter().copied().find(|k| is_modifier(*k));
+    let hotkey = match (modifier, key) {
+        (Some(m), t) if m != t => Hotkey::chord(m, t),
+        (_, t) => Hotkey::single(t),
+    };
 
-    if seen.len() > 1 {
-        let mods: Vec<_> = seen
-            .iter()
-            .filter(|k| is_modifier(**k))
-            .map(|k| format!("{k:?}"))
-            .collect();
-        if !mods.is_empty() {
-            println!(
-                "note: held alongside {}. Only the single key is used;\n\
-                 chords are not supported yet.",
-                mods.join(" + ")
-            );
-        }
+    println!("You pressed: {}", hotkey.describe());
+    if hotkey.modifier.is_none() {
+        println!(
+            "note: a single key can collide with normal typing. A chord such as\n\
+             Right Alt + . is usually safer — hold the modifier, then the key."
+        );
     }
 
+    let short = hotkey.encode();
     print!("\nSave `hotkey = {short}` to your config? [y/N] ");
     std::io::stdout().flush()?;
     let mut answer = String::new();
@@ -280,7 +278,7 @@ fn keys() -> Result<()> {
         return Ok(());
     }
 
-    let path = save_hotkey(short)?;
+    let path = save_hotkey(short.as_str())?;
     println!(
         "Saved to {}. Restart {APP_NAME}d to pick it up.",
         path.display()

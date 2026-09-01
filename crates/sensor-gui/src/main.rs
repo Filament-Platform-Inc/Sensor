@@ -13,15 +13,19 @@ use sensor_core::{
 };
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-/// Hotkeys offered in the dropdown. Anything else is reachable with
-/// `sensorctl keys`, which records whatever the user physically presses.
-const HOTKEY_CHOICES: &[(&str, &str)] = &[
-    ("RIGHTALT", "Right Alt"),
-    ("RIGHTCTRL", "Right Ctrl"),
-    ("SCROLLLOCK", "Scroll Lock"),
-    ("F12", "F12"),
-    ("PAUSE", "Pause"),
-    ("INSERT", "Insert"),
+/// Chords offered in the dropdown, in config-file spelling.
+///
+/// Chords rather than single keys: a lone Right Alt is intercepted by
+/// browsers, and a lone ordinary key steals a character. These pairs collide
+/// with essentially nothing and are reachable with one hand.
+const HOTKEY_CHOICES: &[&str] = &[
+    "RIGHTALT + DOT",
+    "RIGHTALT + COMMA",
+    "RIGHTCTRL + DOT",
+    "RIGHTCTRL + COMMA",
+    "RIGHTALT + SLASH",
+    "F12",
+    "SCROLLLOCK",
 ];
 
 const CSS: &str = "
@@ -258,12 +262,16 @@ fn hotkey_section(cfg: Rc<RefCell<Config>>) -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
     b.append(&section_label("Recording key"));
 
-    let labels: Vec<&str> = HOTKEY_CHOICES.iter().map(|(_, l)| *l).collect();
-    let dropdown = gtk::DropDown::from_strings(&labels);
+    let parsed: Vec<config::Hotkey> = HOTKEY_CHOICES
+        .iter()
+        .filter_map(|s| config::Hotkey::parse(s))
+        .collect();
+    let labels: Vec<String> = parsed.iter().map(|h| h.describe()).collect();
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    let dropdown = gtk::DropDown::from_strings(&label_refs);
 
-    let current = format!("{:?}", cfg.borrow().hotkey);
-    let current = current.strip_prefix("KEY_").unwrap_or(&current).to_string();
-    let selected = HOTKEY_CHOICES.iter().position(|(k, _)| *k == current);
+    let current = cfg.borrow().hotkey;
+    let selected = parsed.iter().position(|h| *h == current);
     match selected {
         Some(i) => dropdown.set_selected(i as u32),
         // A key set via `sensorctl keys` may not be in the list; say so
@@ -271,26 +279,31 @@ fn hotkey_section(cfg: Rc<RefCell<Config>>) -> gtk::Box {
         None => dropdown.set_selected(gtk::INVALID_LIST_POSITION),
     }
 
-    let note = muted(match selected {
-        Some(_) => "Hold this key while you speak.",
-        None => "Your key is set to something not in this list.",
+    let note = muted(&match selected {
+        Some(_) => "Hold both keys while you speak.".to_string(),
+        None => format!(
+            "Currently {}, which is not in this list.",
+            current.describe()
+        ),
     });
 
     let note2 = note.clone();
     dropdown.connect_selected_notify(move |d| {
         let i = d.selected() as usize;
-        let Some((key, label)) = HOTKEY_CHOICES.get(i) else {
+        let (Some(spelling), Some(hotkey)) = (HOTKEY_CHOICES.get(i), parsed.get(i)) else {
             return;
         };
-        match save_setting("hotkey", key) {
+        match save_setting("hotkey", spelling) {
             Ok(()) => {
-                cfg.borrow_mut().hotkey =
-                    config::key_by_name(key).unwrap_or(config::DEFAULT_HOTKEY);
+                cfg.borrow_mut().hotkey = *hotkey;
                 let restarted = service::restart().is_ok();
                 note2.set_text(&if restarted {
-                    format!("Saved. Hold {label} while you speak.")
+                    format!("Saved. Hold {} while you speak.", hotkey.describe())
                 } else {
-                    format!("Saved as {label}. Restart sensor for it to take effect.")
+                    format!(
+                        "Saved as {}. Restart sensor for it to take effect.",
+                        hotkey.describe()
+                    )
                 });
             }
             Err(e) => note2.set_text(&format!("Could not save: {e:#}")),

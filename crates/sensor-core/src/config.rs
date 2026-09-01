@@ -10,18 +10,104 @@ use anyhow::{bail, Context, Result};
 use evdev::Key;
 use std::path::PathBuf;
 
-/// Right Alt: present on effectively every keyboard, rarely bound by
-/// applications, and not part of the Ctrl+V chord used to paste. No key is
-/// safe on every machine -- laptops fold the function row into an Fn layer and
-/// 2024+ models replaced right Ctrl with a Copilot key -- so this is a
-/// starting point that the config overrides, not an assumption.
-pub const DEFAULT_HOTKEY: Key = Key::KEY_RIGHTALT;
+/// A key, or a modifier plus a key held together.
+///
+/// Chords rather than single keys by default: a lone modifier is grabbed by
+/// browsers and desktops, and a lone ordinary key steals a character. A pair
+/// like Right Alt + `.` collides with almost nothing while staying reachable
+/// with one hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkey {
+    /// Held first; `None` for a single-key hotkey.
+    pub modifier: Option<Key>,
+    /// The key that completes the chord, and the one devices are matched on.
+    pub trigger: Key,
+}
+
+impl Hotkey {
+    pub fn single(trigger: Key) -> Self {
+        Self {
+            modifier: None,
+            trigger,
+        }
+    }
+
+    pub fn chord(modifier: Key, trigger: Key) -> Self {
+        Self {
+            modifier: Some(modifier),
+            trigger,
+        }
+    }
+
+    /// Whether this hotkey is satisfied by the keys currently held.
+    ///
+    /// Other keys being down is fine: the user may type while dictating, and
+    /// requiring an exact match would end the recording on any stray key.
+    pub fn is_held(&self, down: &std::collections::HashSet<Key>) -> bool {
+        down.contains(&self.trigger) && self.modifier.is_none_or(|m| down.contains(&m))
+    }
+
+    /// How the config file spells it.
+    pub fn encode(&self) -> String {
+        let short = |k: Key| {
+            let n = format!("{k:?}");
+            n.strip_prefix("KEY_").unwrap_or(&n).to_string()
+        };
+        match self.modifier {
+            Some(m) => format!("{} + {}", short(m), short(self.trigger)),
+            None => short(self.trigger),
+        }
+    }
+
+    /// How a person should see it.
+    pub fn describe(&self) -> String {
+        let pretty = |k: Key| match k {
+            Key::KEY_RIGHTALT => "Right Alt".to_string(),
+            Key::KEY_LEFTALT => "Left Alt".to_string(),
+            Key::KEY_RIGHTCTRL => "Right Ctrl".to_string(),
+            Key::KEY_LEFTCTRL => "Left Ctrl".to_string(),
+            Key::KEY_RIGHTSHIFT => "Right Shift".to_string(),
+            Key::KEY_LEFTSHIFT => "Left Shift".to_string(),
+            Key::KEY_DOT => ".".to_string(),
+            Key::KEY_COMMA => ",".to_string(),
+            Key::KEY_SEMICOLON => ";".to_string(),
+            Key::KEY_SLASH => "/".to_string(),
+            other => {
+                let n = format!("{other:?}");
+                n.strip_prefix("KEY_").unwrap_or(&n).to_string()
+            }
+        };
+        match self.modifier {
+            Some(m) => format!("{} + {}", pretty(m), pretty(self.trigger)),
+            None => pretty(self.trigger),
+        }
+    }
+
+    /// Parses `RIGHTALT + DOT`, `right alt + .`, or a bare key name.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (modifier, trigger) = match text.split_once('+') {
+            Some((m, t)) => (Some(key_by_name(m)?), key_by_name(t)?),
+            None => (None, key_by_name(text)?),
+        };
+        Some(Self { modifier, trigger })
+    }
+}
+
+/// Right Alt + `.` -- a chord, because single keys are all taken. A plain
+/// modifier is intercepted by browsers and desktops, and a plain key steals a
+/// character. No hotkey is safe on every machine either: laptops fold the
+/// function row into an Fn layer, and 2024+ models replaced right Ctrl with a
+/// Copilot key. So this is a starting point the config overrides.
+pub const DEFAULT_HOTKEY: Hotkey = Hotkey {
+    modifier: Some(Key::KEY_RIGHTALT),
+    trigger: Key::KEY_DOT,
+};
 
 pub const DEFAULT_MODEL: &str = "ggml-tiny.en.bin";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    pub hotkey: Key,
+    pub hotkey: Hotkey,
     pub model: Option<PathBuf>,
     /// Terminals need Ctrl+Shift+V; there is no reliable way to detect the
     /// focused app under Wayland, so this stays a user choice.
@@ -68,7 +154,7 @@ impl Config {
             let (key, value) = (key.trim(), value.trim());
             match key {
                 "hotkey" => {
-                    cfg.hotkey = key_by_name(value)
+                    cfg.hotkey = Hotkey::parse(value)
                         .with_context(|| format!("line {}: no such key {value:?}", n + 1))?
                 }
                 "model" => cfg.model = Some(PathBuf::from(value)),
@@ -92,11 +178,25 @@ impl Config {
 /// Resolves an evdev key from its name, with or without the `KEY_` prefix.
 /// evdev exposes no reverse lookup, so scan the keycode space for a match.
 pub fn key_by_name(name: &str) -> Option<Key> {
-    let name = name.trim().to_uppercase();
-    let name = if name.starts_with("KEY_") {
-        name
+    // Accept what a person would type: "right alt", ".", "Right_Alt".
+    let cleaned: String = name
+        .trim()
+        .to_uppercase()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .collect();
+    let cleaned = match cleaned.as_str() {
+        "." => "DOT".to_string(),
+        "," => "COMMA".to_string(),
+        ";" => "SEMICOLON".to_string(),
+        "/" => "SLASH".to_string(),
+        "'" => "APOSTROPHE".to_string(),
+        other => other.to_string(),
+    };
+    let name = if cleaned.starts_with("KEY") && !cleaned.starts_with("KEYBOARD") {
+        format!("KEY_{}", cleaned.trim_start_matches("KEY"))
     } else {
-        format!("KEY_{name}")
+        format!("KEY_{cleaned}")
     };
     (0..0x2ffu16)
         .map(Key::new)
@@ -150,7 +250,7 @@ mod tests {
             "hotkey = F12\nmodel = /tmp/m.bin\npaste_shift = true\nmicrophone = pipewire",
         )
         .unwrap();
-        assert_eq!(cfg.hotkey, Key::KEY_F12);
+        assert_eq!(cfg.hotkey, Hotkey::single(Key::KEY_F12));
         assert_eq!(cfg.model, Some(PathBuf::from("/tmp/m.bin")));
         assert!(cfg.paste_shift);
         assert_eq!(cfg.microphone.as_deref(), Some("pipewire"));
@@ -164,7 +264,7 @@ mod tests {
     #[test]
     fn ignores_comments_and_whitespace() {
         let cfg = Config::parse("# a comment\n  hotkey=RIGHTALT   # trailing\n").unwrap();
-        assert_eq!(cfg.hotkey, Key::KEY_RIGHTALT);
+        assert_eq!(cfg.hotkey, Hotkey::single(Key::KEY_RIGHTALT));
     }
 
     #[test]
@@ -181,6 +281,40 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn parses_chords_in_the_forms_a_person_would_write() {
+        let alt_dot = Hotkey::chord(Key::KEY_RIGHTALT, Key::KEY_DOT);
+        for spelling in [
+            "RIGHTALT + DOT",
+            "rightalt+dot",
+            "right alt + .",
+            "KEY_RIGHTALT + KEY_DOT",
+        ] {
+            assert_eq!(Hotkey::parse(spelling), Some(alt_dot), "{spelling:?}");
+        }
+        assert_eq!(Hotkey::parse("nonsense + dot"), None);
+    }
+
+    #[test]
+    fn hotkey_round_trips_through_the_config_file() {
+        for h in [
+            Hotkey::chord(Key::KEY_RIGHTALT, Key::KEY_DOT),
+            Hotkey::chord(Key::KEY_RIGHTCTRL, Key::KEY_COMMA),
+            Hotkey::single(Key::KEY_F12),
+        ] {
+            let text = format!("hotkey = {}", h.encode());
+            assert_eq!(Config::parse(&text).unwrap().hotkey, h, "{text}");
+        }
+    }
+
+    #[test]
+    fn describes_chords_readably() {
+        assert_eq!(
+            Hotkey::chord(Key::KEY_RIGHTALT, Key::KEY_DOT).describe(),
+            "Right Alt + ."
+        );
     }
 
     #[test]

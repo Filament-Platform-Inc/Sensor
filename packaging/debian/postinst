@@ -19,6 +19,14 @@ case "$1" in
     udevadm trigger --action=change /sys/devices/virtual/misc/uinput 2>/dev/null || true
     udevadm trigger --subsystem-match=input --action=change 2>/dev/null || true
 
+    # Make the icon and menu entry visible without a re-login.
+    if command -v gtk-update-icon-cache >/dev/null; then
+      gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+    if command -v update-desktop-database >/dev/null; then
+      update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    fi
+
     # Add the installing user -- SUDO_USER is who ran sudo, not root.
     TARGET_USER="${SUDO_USER:-${PKEXEC_UID:+$(getent passwd "$PKEXEC_UID" | cut -d: -f1)}}"
     if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then

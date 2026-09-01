@@ -8,6 +8,8 @@ What installing this package changed
   /usr/lib/udev/rules.d/99-sensor.rules     device permissions
   /usr/lib/modules-load.d/sensor.conf       loads the uinput module at boot
   /usr/lib/systemd/user/sensord.service     the user service (not system)
+  /usr/share/applications/sensor.desktop    the launcher entry
+  /usr/share/icons/hicolor/*/apps/          the app icon
   /var/lib/sensor/added-groups              record of group changes, for removal
 
 It also created a system group 'uinput' if absent, and added the installing
