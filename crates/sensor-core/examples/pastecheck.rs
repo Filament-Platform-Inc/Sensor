@@ -6,7 +6,10 @@ use sensor_core::output::{Injector, PasteChord};
 use std::{process::Command, thread, time::Duration};
 
 fn clip() -> String {
-    let o = Command::new("wl-paste").arg("--no-newline").output().unwrap();
+    let o = Command::new("wl-paste")
+        .arg("--no-newline")
+        .output()
+        .unwrap();
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
@@ -23,7 +26,11 @@ fn main() {
             .spawn()
             .unwrap();
         use std::io::Write;
-        c.stdin.as_mut().unwrap().write_all(sentinel.as_bytes()).unwrap();
+        c.stdin
+            .as_mut()
+            .unwrap()
+            .write_all(sentinel.as_bytes())
+            .unwrap();
         c.wait().unwrap();
         thread::sleep(Duration::from_millis(120));
 

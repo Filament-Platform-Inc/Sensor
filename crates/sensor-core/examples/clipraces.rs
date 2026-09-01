@@ -29,7 +29,10 @@ fn main() {
         let mut claimed = None;
         let deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < deadline {
-            let out = Command::new("wl-paste").arg("--no-newline").output().unwrap();
+            let out = Command::new("wl-paste")
+                .arg("--no-newline")
+                .output()
+                .unwrap();
             if String::from_utf8_lossy(&out.stdout).trim_end() == text {
                 claimed = Some(start.elapsed());
                 break;

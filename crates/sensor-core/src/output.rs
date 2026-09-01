@@ -67,11 +67,13 @@ impl Injector {
         if !wait_for_clipboard(text, CLIPBOARD_CLAIM_TIMEOUT) {
             let _ = server.kill();
             let _ = server.wait();
-            if let Some(prev) = saved {
-                let _ = clipboard_set(&prev);
-            }
+            // Leave the transcription on the clipboard rather than restoring:
+            // the user just spoke those words, and losing them outright is
+            // worse than a clipboard they can paste themselves.
+            let _ = clipboard_set(text);
             return Err(anyhow!(
-                "could not put the text on the clipboard within {CLIPBOARD_CLAIM_TIMEOUT:?}"
+                "could not paste within {CLIPBOARD_CLAIM_TIMEOUT:?}, so the text was \
+                 left on your clipboard — press Ctrl+V to insert it"
             ));
         }
 
@@ -83,24 +85,24 @@ impl Injector {
         if !consumed {
             let _ = server.kill();
             let _ = server.wait();
-        } else {
-            // wl-copy exits on the data *request*; the app still has to read
-            // it. Restoring immediately can truncate that read.
-            thread::sleep(PASTE_SETTLE);
+            // The app never took it, so keep the words reachable rather than
+            // restoring over them. Same reasoning as the claim timeout above.
+            let _ = clipboard_set(text);
+            return Err(anyhow!(
+                "the focused window did not accept a paste within {PASTE_TIMEOUT:?}, \
+                 so the text was left on your clipboard — press Ctrl+V to insert it \
+                 (a terminal may need Ctrl+Shift+V)"
+            ));
         }
+
+        // wl-copy exits on the data *request*; the app still has to read it.
+        // Restoring immediately can truncate that read.
+        thread::sleep(PASTE_SETTLE);
 
         if let Some(prev) = saved {
             clipboard_set(&prev)?;
         }
-
-        if consumed {
-            Ok(())
-        } else {
-            Err(anyhow!(
-                "the focused window did not accept a paste within {PASTE_TIMEOUT:?} \
-                 (a terminal may need Ctrl+Shift+V)"
-            ))
-        }
+        Ok(())
     }
 
     fn send_chord(&mut self, chord: PasteChord) -> Result<()> {
@@ -127,7 +129,11 @@ impl Injector {
 const PASTE_TIMEOUT: Duration = Duration::from_millis(600);
 
 /// How long to wait for `wl-copy` to actually claim the selection.
-const CLIPBOARD_CLAIM_TIMEOUT: Duration = Duration::from_millis(400);
+///
+/// Claiming takes ~60ms typically, but contention pushes it well past that,
+/// and timing out here loses the transcription entirely -- a far worse outcome
+/// than a slow paste. So the budget is generous.
+const CLIPBOARD_CLAIM_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// Grace period between the app requesting the data and having read it.
 /// Short enough to stay inside the latency budget, long enough for a local
@@ -138,16 +144,22 @@ const PASTE_SETTLE: Duration = Duration::from_millis(40);
 ///
 /// Positive confirmation, rather than assuming the spawn succeeded: reading it
 /// back is the only way to know the compositor has handed the selection over.
+///
+/// The interval backs off rather than polling flat out. Each check spawns a
+/// `wl-paste`, and hammering the compositor's clipboard dozens of times a
+/// second is both wasteful and liable to trip a desktop permission prompt.
 fn wait_for_clipboard(text: &str, limit: Duration) -> bool {
     // wl-paste --no-newline strips one trailing newline, so compare trimmed
     // ends rather than requiring an exact match we might never see.
     let want = text.trim_end();
     let deadline = std::time::Instant::now() + limit;
+    let mut interval = Duration::from_millis(10);
     while std::time::Instant::now() < deadline {
         if clipboard_get().as_deref().map(str::trim_end) == Some(want) {
             return true;
         }
-        thread::sleep(Duration::from_millis(3));
+        thread::sleep(interval);
+        interval = (interval * 2).min(Duration::from_millis(60));
     }
     false
 }
