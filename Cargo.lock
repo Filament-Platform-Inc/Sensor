@@ -707,6 +707,7 @@ name = "sensorctl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "evdev",
  "sensor-core",
 ]
 

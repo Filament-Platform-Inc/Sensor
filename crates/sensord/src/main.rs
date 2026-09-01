@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use evdev::Key;
 use sensor_core::{
     audio::{self, Recorder},
+    config::{self, Config},
     hotkey::{self, HotkeyEvent},
     output::{Injector, PasteChord},
     stt::Transcriber,
@@ -15,9 +16,33 @@ use sensor_core::{
 };
 use std::{path::PathBuf, time::Instant};
 
+const USAGE: &str = "\
+usage: sensord [MODEL_PATH]
+
+Hold the hotkey, speak, release: the text appears in the focused window.
+
+  MODEL_PATH        whisper model to load; overrides config and SENSOR_MODEL
+
+environment:
+  SENSOR_HOTKEY     evdev key name (e.g. RIGHTALT, F12), overrides config
+  SENSOR_MODEL      model path
+
+Settings live in the config file; run `sensorctl keys` to find a key name.";
+
 fn main() -> Result<()> {
-    let model = model_path()?;
-    let key = hotkey_key()?;
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        println!("\nconfig: {}", config::config_path()?.display());
+        return Ok(());
+    }
+    let cfg = Config::load()?;
+    let key = hotkey(&cfg)?;
+    let model = model_path(&cfg)?;
+    let chord = if cfg.paste_shift {
+        PasteChord::CtrlShiftV
+    } else {
+        PasteChord::CtrlV
+    };
 
     eprintln!("{APP_NAME}: loading model from {}", model.display());
     let mut stt = Transcriber::load(&model)?;
@@ -25,6 +50,7 @@ fn main() -> Result<()> {
     let events = hotkey::watch(key)?;
 
     eprintln!("{APP_NAME}: ready — hold {key:?} and speak");
+    eprintln!("{APP_NAME}: config at {}", config::config_path()?.display());
 
     let mut recording: Option<Recorder> = None;
     for event in events {
@@ -43,7 +69,7 @@ fn main() -> Result<()> {
                 let Some(recorder) = recording.take() else {
                     continue;
                 };
-                if let Err(e) = handle_utterance(recorder, &mut stt, &mut injector) {
+                if let Err(e) = handle_utterance(recorder, &mut stt, &mut injector, chord) {
                     eprintln!("  {e:#}");
                 }
             }
@@ -56,6 +82,7 @@ fn handle_utterance(
     recorder: Recorder,
     stt: &mut Transcriber,
     injector: &mut Injector,
+    chord: PasteChord,
 ) -> Result<()> {
     let released = Instant::now();
     let samples = recorder.finish()?;
@@ -75,7 +102,7 @@ fn handle_utterance(
         return Ok(());
     }
 
-    injector.paste(&text, PasteChord::CtrlV)?;
+    injector.paste(&text, chord)?;
 
     eprintln!(
         "  {audio_secs:.1}s audio | transcribe {}ms | paste {}ms | {text:?}",
@@ -85,59 +112,30 @@ fn handle_utterance(
     Ok(())
 }
 
-/// Hotkey: `SENSOR_HOTKEY` as an evdev name (`KEY_F12`, `F12`), else F12.
-///
-/// F12 over a modifier: holding a real modifier turns every other keypress
-/// during dictation into a chord the focused app will act on.
-fn hotkey_key() -> Result<Key> {
-    let Ok(name) = std::env::var("SENSOR_HOTKEY") else {
-        return Ok(Key::KEY_F12);
+/// Hotkey: `SENSOR_HOTKEY` overrides the config file, which defaults to
+/// right Alt. The env var exists so a key can be tried without editing config.
+fn hotkey(cfg: &Config) -> Result<Key> {
+    let Some(name) = std::env::var_os("SENSOR_HOTKEY") else {
+        return Ok(cfg.hotkey);
     };
-    key_by_name(&name).with_context(|| format!("SENSOR_HOTKEY: no such key {name:?}"))
+    let name = name.to_string_lossy().into_owned();
+    config::key_by_name(&name).with_context(|| format!("SENSOR_HOTKEY: no such key {name:?}"))
 }
 
-/// evdev exposes no name lookup, so scan the keycode space for a match.
-fn key_by_name(name: &str) -> Option<Key> {
-    let name = name.trim().to_uppercase();
-    let name = if name.starts_with("KEY_") {
-        name
-    } else {
-        format!("KEY_{name}")
-    };
-    (0..0x2ffu16)
-        .map(Key::new)
-        .find(|k| format!("{k:?}") == name)
-}
-
-/// Model location: argument, then env var, then the repo-local models dir.
-fn model_path() -> Result<PathBuf> {
+/// Model location: argument, then env var, then config, then the repo-local dir.
+fn model_path(cfg: &Config) -> Result<PathBuf> {
     if let Some(p) = std::env::args().nth(1) {
         return Ok(p.into());
     }
-    if let Ok(p) = std::env::var("SENSOR_MODEL") {
+    if let Some(p) = std::env::var_os("SENSOR_MODEL") {
         return Ok(p.into());
     }
-    let local = PathBuf::from("models/ggml-tiny.en.bin");
+    if let Some(p) = &cfg.model {
+        return Ok(p.clone());
+    }
+    let local = PathBuf::from("models").join(config::DEFAULT_MODEL);
     local
         .exists()
         .then_some(local)
-        .context("no model found — pass a path, set SENSOR_MODEL, or place one in models/")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolves_keys_with_or_without_prefix() {
-        assert_eq!(key_by_name("F12"), Some(Key::KEY_F12));
-        assert_eq!(key_by_name("key_f12"), Some(Key::KEY_F12));
-        assert_eq!(key_by_name("SCROLLLOCK"), Some(Key::KEY_SCROLLLOCK));
-        assert_eq!(key_by_name("RIGHTCTRL"), Some(Key::KEY_RIGHTCTRL));
-    }
-
-    #[test]
-    fn rejects_unknown_keys() {
-        assert_eq!(key_by_name("NOPE"), None);
-    }
+        .context("no model found — pass a path, set SENSOR_MODEL, or set `model =` in the config")
 }

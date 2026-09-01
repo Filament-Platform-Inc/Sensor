@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 sensor-core = { path = "../sensor-core" }
 anyhow.workspace = true
+evdev.workspace = true
