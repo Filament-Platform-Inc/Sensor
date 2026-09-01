@@ -45,17 +45,36 @@ impl Injector {
 
     /// Put `text` in the focused window: stash the user's clipboard, paste, restore.
     ///
-    /// Restoring the clipboard is a race: put the old contents back before the
-    /// target app has read ours and the user gets their previous clipboard
-    /// pasted instead. Sleeping a guessed interval is the usual fix and is why
-    /// this bug recurs across the category (OpenWhispr#240). Instead we serve
-    /// the text with `wl-copy --paste-once`, which exits after exactly one
-    /// paste request -- so process exit *is* the signal that the app has taken
-    /// the text, and there is nothing to guess.
+    /// Both ends of this are races, and getting either wrong pastes the user's
+    /// previous clipboard instead of their words:
+    ///
+    /// * Sending the chord before `wl-copy` has claimed the selection makes the
+    ///   app paste whatever was there before. So we wait for the clipboard to
+    ///   actually read back as our text rather than assuming the spawn took.
+    /// * Restoring the old contents the instant `wl-copy` exits is too early:
+    ///   it exits when the app *requests* the data, which is before the app has
+    ///   finished reading it. So we settle briefly after that.
+    ///
+    /// Sleeping a guessed interval instead is why this bug recurs across the
+    /// category (OpenWhispr#240).
     pub fn paste(&mut self, text: &str, chord: PasteChord) -> Result<()> {
         let saved = clipboard_get();
 
         let mut server = spawn_paste_once(text)?;
+
+        // Do not paste until the clipboard actually holds our text, or we race
+        // the compositor and the app pastes the previous contents.
+        if !wait_for_clipboard(text, CLIPBOARD_CLAIM_TIMEOUT) {
+            let _ = server.kill();
+            let _ = server.wait();
+            if let Some(prev) = saved {
+                let _ = clipboard_set(&prev);
+            }
+            return Err(anyhow!(
+                "could not put the text on the clipboard within {CLIPBOARD_CLAIM_TIMEOUT:?}"
+            ));
+        }
+
         self.send_chord(chord)?;
 
         // Bounded wait: if the focused app never pastes (wrong chord for a
@@ -64,6 +83,10 @@ impl Injector {
         if !consumed {
             let _ = server.kill();
             let _ = server.wait();
+        } else {
+            // wl-copy exits on the data *request*; the app still has to read
+            // it. Restoring immediately can truncate that read.
+            thread::sleep(PASTE_SETTLE);
         }
 
         if let Some(prev) = saved {
@@ -102,6 +125,32 @@ impl Injector {
 
 /// How long to wait for the focused app to take the clipboard before giving up.
 const PASTE_TIMEOUT: Duration = Duration::from_millis(600);
+
+/// How long to wait for `wl-copy` to actually claim the selection.
+const CLIPBOARD_CLAIM_TIMEOUT: Duration = Duration::from_millis(400);
+
+/// Grace period between the app requesting the data and having read it.
+/// Short enough to stay inside the latency budget, long enough for a local
+/// pipe read to complete.
+const PASTE_SETTLE: Duration = Duration::from_millis(40);
+
+/// Polls the clipboard until it reads back as `text`.
+///
+/// Positive confirmation, rather than assuming the spawn succeeded: reading it
+/// back is the only way to know the compositor has handed the selection over.
+fn wait_for_clipboard(text: &str, limit: Duration) -> bool {
+    // wl-paste --no-newline strips one trailing newline, so compare trimmed
+    // ends rather than requiring an exact match we might never see.
+    let want = text.trim_end();
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if clipboard_get().as_deref().map(str::trim_end) == Some(want) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(3));
+    }
+    false
+}
 
 /// Serve `text` on the clipboard for exactly one paste, then exit.
 fn spawn_paste_once(text: &str) -> Result<std::process::Child> {
