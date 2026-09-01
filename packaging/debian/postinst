@@ -4,10 +4,14 @@ set -e
 
 case "$1" in
   configure)
-    # 'input' already exists on Debian/Ubuntu; 'uinput' generally does not.
-    if ! getent group uinput >/dev/null; then
-      addgroup --system uinput
-    fi
+    # 'input' normally comes from systemd-udev and 'uinput' from nobody, but
+    # neither is guaranteed -- a minimal or containerised system may have
+    # neither. Create whichever is missing rather than assuming.
+    for grp in input uinput; do
+      if ! getent group "$grp" >/dev/null; then
+        addgroup --system "$grp"
+      fi
+    done
 
     # Load now so the device exists without a reboot.
     modprobe uinput 2>/dev/null || true
@@ -33,9 +37,15 @@ case "$1" in
       # Record what we changed so postrm only reverses our own additions.
       mkdir -p /var/lib/sensor
       for grp in input uinput; do
-        if ! id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
-          adduser "$TARGET_USER" "$grp" >/dev/null 2>&1 || true
+        if id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+          continue  # already a member; not ours to remove later
+        fi
+        # Record only what actually succeeded, or postrm would claim to
+        # reverse a change that never happened.
+        if adduser "$TARGET_USER" "$grp" >/dev/null 2>&1; then
           echo "$TARGET_USER $grp" >> /var/lib/sensor/added-groups
+        else
+          echo "warning: could not add $TARGET_USER to '$grp'" >&2
         fi
       done
 
