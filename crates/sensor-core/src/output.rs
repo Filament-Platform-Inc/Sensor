@@ -6,7 +6,7 @@
 //! from the active layout at all. So the text travels via the clipboard and we
 //! inject only the paste chord, whose scancodes are layout-stable.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use evdev::{
     uinput::VirtualDevice, uinput::VirtualDeviceBuilder, AttributeSet, EventType, InputEvent, Key,
 };
@@ -44,19 +44,40 @@ impl Injector {
     }
 
     /// Put `text` in the focused window: stash the user's clipboard, paste, restore.
+    ///
+    /// Restoring the clipboard is a race: put the old contents back before the
+    /// target app has read ours and the user gets their previous clipboard
+    /// pasted instead. Sleeping a guessed interval is the usual fix and is why
+    /// this bug recurs across the category (OpenWhispr#240). Instead we serve
+    /// the text with `wl-copy --paste-once`, which exits after exactly one
+    /// paste request -- so process exit *is* the signal that the app has taken
+    /// the text, and there is nothing to guess.
     pub fn paste(&mut self, text: &str, chord: PasteChord) -> Result<()> {
         let saved = clipboard_get();
-        clipboard_set(text)?;
+
+        let mut server = spawn_paste_once(text)?;
         self.send_chord(chord)?;
 
-        // The restore race: put the old clipboard back too soon and the target
-        // app reads it instead of our text. See OpenWhispr#240. A fixed sleep is
-        // a poor fix; tracked as a real problem to solve before v1 ships.
-        thread::sleep(Duration::from_millis(400));
+        // Bounded wait: if the focused app never pastes (wrong chord for a
+        // terminal, say) we must not hang, and must still restore.
+        let consumed = wait_with_timeout(&mut server, PASTE_TIMEOUT)?;
+        if !consumed {
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
         if let Some(prev) = saved {
             clipboard_set(&prev)?;
         }
-        Ok(())
+
+        if consumed {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "the focused window did not accept a paste within {PASTE_TIMEOUT:?} \
+                 (a terminal may need Ctrl+Shift+V)"
+            ))
+        }
     }
 
     fn send_chord(&mut self, chord: PasteChord) -> Result<()> {
@@ -77,6 +98,36 @@ impl Injector {
         self.device.emit(&evs).context("emitting paste chord")?;
         Ok(())
     }
+}
+
+/// How long to wait for the focused app to take the clipboard before giving up.
+const PASTE_TIMEOUT: Duration = Duration::from_millis(600);
+
+/// Serve `text` on the clipboard for exactly one paste, then exit.
+fn spawn_paste_once(text: &str) -> Result<std::process::Child> {
+    let mut child = Command::new("wl-copy")
+        .args(["--paste-once", "--foreground"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("running wl-copy — is wl-clipboard installed?")?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(text.as_bytes())?;
+    Ok(child)
+}
+
+/// Poll for the child to exit. Returns whether it exited within `limit`.
+fn wait_with_timeout(child: &mut std::process::Child, limit: Duration) -> Result<bool> {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait()?.is_some() {
+            return Ok(true);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(false)
 }
 
 fn clipboard_get() -> Option<String> {
