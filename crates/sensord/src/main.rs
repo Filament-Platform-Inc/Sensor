@@ -133,9 +133,19 @@ fn model_path(cfg: &Config) -> Result<PathBuf> {
     if let Some(p) = &cfg.model {
         return Ok(p.clone());
     }
+    // Repo-local models take precedence when present, so a checkout runs
+    // without touching the user's data dir.
     let local = PathBuf::from("models").join(config::DEFAULT_MODEL);
-    local
-        .exists()
-        .then_some(local)
-        .context("no model found — pass a path, set SENSOR_MODEL, or set `model =` in the config")
+    if local.exists() {
+        return Ok(local);
+    }
+    let installed = config::default_model_path()?;
+    if installed.exists() {
+        return Ok(installed);
+    }
+    anyhow::bail!(
+        "no speech model found. Run `sensorctl setup` to download it,\n\
+         or pass a path / set SENSOR_MODEL / set `model =` in {}",
+        config::config_path()?.display()
+    )
 }

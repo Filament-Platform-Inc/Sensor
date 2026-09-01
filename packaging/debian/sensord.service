@@ -1,0 +1,31 @@
+[Unit]
+Description=sensor voice dictation daemon
+Documentation=https://sensor.filamentplatform.com
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sensord
+Restart=on-failure
+RestartSec=2
+
+# The daemon reads every keystroke, so constrain what else it can reach.
+# It needs no network at all: transcription is entirely local.
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+# Config and the downloaded model live under the user's XDG dirs.
+ReadWritePaths=%h/.config/sensor %h/.local/share/sensor
+
+[Install]
+WantedBy=graphical-session.target

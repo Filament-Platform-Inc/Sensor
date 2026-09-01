@@ -2,3 +2,4 @@
 *.wav
 /models
 test.md
+dist/

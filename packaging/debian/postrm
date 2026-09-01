@@ -1,0 +1,43 @@
+#!/bin/sh
+# Reverses postinst. The promise is that removing this package leaves the
+# machine as it was found, so this must stay in step with postinst.
+set -e
+
+case "$1" in
+  remove|purge)
+    # Undo only the group memberships we added, never pre-existing ones.
+    if [ -f /var/lib/sensor/added-groups ]; then
+      while read -r user grp; do
+        [ -n "$user" ] && [ -n "$grp" ] || continue
+        deluser "$user" "$grp" >/dev/null 2>&1 || true
+      done < /var/lib/sensor/added-groups
+      rm -f /var/lib/sensor/added-groups
+    fi
+
+    # Drop the group we created, if nothing else is using it.
+    if getent group uinput >/dev/null; then
+      if [ -z "$(getent group uinput | cut -d: -f4)" ]; then
+        delgroup --system uinput >/dev/null 2>&1 || true
+      fi
+    fi
+
+    udevadm control --reload-rules 2>/dev/null || true
+    rmdir /var/lib/sensor 2>/dev/null || true
+    ;;
+esac
+
+case "$1" in
+  purge)
+    # Purge additionally removes the model and per-user settings. These live
+    # in each user's home, so walk real users rather than guessing.
+    for home in /home/*; do
+      [ -d "$home" ] || continue
+      rm -rf "$home/.config/sensor" "$home/.local/share/sensor"
+      rm -f "$home/.config/systemd/user/default.target.wants/sensord.service"
+      rm -f "$home/.config/systemd/user/graphical-session.target.wants/sensord.service"
+    done
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

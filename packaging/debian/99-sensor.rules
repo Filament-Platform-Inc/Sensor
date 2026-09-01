@@ -1,0 +1,6 @@
+# Grant the virtual-keyboard device and input devices to dedicated groups, so
+# sensord can run as an ordinary user rather than root.
+#
+# uinput is what sensor types through; input is what it reads the hotkey from.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="input", KERNEL=="event*", GROUP="input", MODE="0640"

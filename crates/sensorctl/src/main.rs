@@ -13,6 +13,7 @@ use sensor_core::{
 };
 use std::{
     io::Write,
+    process::Command,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -21,14 +22,22 @@ use std::{
 const USAGE: &str = "\
 usage: sensorctl <command>
 
+  setup             download the speech model and enable the daemon
   keys              press a key to see its name, then save it as the hotkey
   config            show the current settings and where they live
+  doctor            check permissions, model, and daemon state
   help              this text";
+
+/// Upstream ggml weights. Pinned by name; whisper.cpp keeps these stable.
+const MODEL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
 
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
+        Some("setup") => setup(),
         Some("keys") => keys(),
         Some("config") => show_config(),
+        Some("doctor") => doctor(),
         Some("help") | Some("--help") | Some("-h") | None => {
             println!("{USAGE}");
             Ok(())
@@ -37,6 +46,145 @@ fn main() -> Result<()> {
             eprintln!("{APP_NAME}ctl: unknown command {other:?}\n\n{USAGE}");
             std::process::exit(2);
         }
+    }
+}
+
+/// First-run: fetch the model, then enable the user service.
+fn setup() -> Result<()> {
+    let model = config::default_model_path()?;
+    if model.exists() {
+        println!("model already present at {}", model.display());
+    } else {
+        let dir = model.parent().context("model path has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+        println!("Downloading the speech model (~75MB, once)...");
+        // Download beside the target and rename, so an interrupted fetch
+        // never leaves a truncated file that looks valid.
+        let tmp = model.with_extension("partial");
+        let status = Command::new("curl")
+            .args(["-fL", "--progress-bar", "-o"])
+            .arg(&tmp)
+            .arg(MODEL_URL)
+            .status()
+            .context("running curl — is it installed?")?;
+        if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::bail!("model download failed");
+        }
+        std::fs::rename(&tmp, &model)
+            .with_context(|| format!("moving model into {}", model.display()))?;
+        println!("Model saved to {}", model.display());
+    }
+
+    match enable_service() {
+        Ok(true) => println!("\nDaemon enabled. It will start automatically at login."),
+        Ok(false) => println!("\nCould not reach systemd --user; start manually with:\n  sensord"),
+        Err(e) => eprintln!("\nwarning: enabling the service failed: {e:#}"),
+    }
+
+    if !in_groups() {
+        println!(
+            "\nOne step remains: log out and back in, so your 'input' and 'uinput'\n\
+             group membership reaches this session."
+        );
+    } else {
+        println!("\nReady. Hold the hotkey and speak.");
+    }
+    Ok(())
+}
+
+fn enable_service() -> Result<bool> {
+    let out = Command::new("systemctl")
+        .args(["--user", "enable", "--now", "sensord.service"])
+        .output();
+    Ok(match out {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    })
+}
+
+/// Whether this *session* has the groups, which is not the same as whether
+/// the user is a member -- membership only reaches a session at next login.
+fn in_groups() -> bool {
+    let Ok(out) = Command::new("id").arg("-nG").output() else {
+        return false;
+    };
+    let groups = String::from_utf8_lossy(&out.stdout);
+    let have: Vec<_> = groups.split_whitespace().collect();
+    have.contains(&"input") && have.contains(&"uinput")
+}
+
+/// Reports what is and is not working, so a broken install is diagnosable
+/// without reading source.
+fn doctor() -> Result<()> {
+    let mut problems = 0;
+
+    let session_groups = in_groups();
+    report(
+        session_groups,
+        "session has 'input' and 'uinput' groups",
+        "log out and back in to pick up group membership",
+        &mut problems,
+    );
+
+    let uinput = std::path::Path::new("/dev/uinput").exists();
+    report(
+        uinput,
+        "/dev/uinput exists",
+        "run: sudo modprobe uinput",
+        &mut problems,
+    );
+
+    let readable =
+        evdev::enumerate().any(|(_, d)| d.supported_keys().is_some_and(|k| k.contains(Key::KEY_A)));
+    report(
+        readable,
+        "can read a keyboard",
+        "check /dev/input permissions and 'input' group membership",
+        &mut problems,
+    );
+
+    let model = config::default_model_path()?;
+    let has_model = model.exists()
+        || std::path::Path::new("models")
+            .join(config::DEFAULT_MODEL)
+            .exists();
+    report(
+        has_model,
+        "speech model present",
+        "run: sensorctl setup",
+        &mut problems,
+    );
+
+    let wl = Command::new("sh")
+        .args(["-c", "command -v wl-copy"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    report(
+        wl,
+        "wl-copy available",
+        "install it: sudo apt install wl-clipboard",
+        &mut problems,
+    );
+
+    println!();
+    if problems == 0 {
+        println!("All checks passed.");
+    } else {
+        println!("{problems} problem(s) found.");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn report(ok: bool, label: &str, fix: &str, problems: &mut u32) {
+    if ok {
+        println!("  ok    {label}");
+    } else {
+        println!("  FAIL  {label}\n        -> {fix}");
+        *problems += 1;
     }
 }
 

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stop the daemon before its binary is removed, for every user running one.
+set -e
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
+      systemctl --user --machine="$uid@" stop sensord.service 2>/dev/null || true
+    done
+    pkill -x sensord 2>/dev/null || true
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

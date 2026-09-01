@@ -1,0 +1,51 @@
+#!/bin/sh
+# Reversed by postrm. Anything added here must be removed there.
+set -e
+
+case "$1" in
+  configure)
+    # 'input' already exists on Debian/Ubuntu; 'uinput' generally does not.
+    if ! getent group uinput >/dev/null; then
+      addgroup --system uinput
+    fi
+
+    # Load now so the device exists without a reboot.
+    modprobe uinput 2>/dev/null || true
+
+    # Re-apply rules to the already-present node. Without this the permissions
+    # only take effect at next boot, which is the step every competing project
+    # tells the user to perform manually.
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --action=change /sys/devices/virtual/misc/uinput 2>/dev/null || true
+    udevadm trigger --subsystem-match=input --action=change 2>/dev/null || true
+
+    # Add the installing user -- SUDO_USER is who ran sudo, not root.
+    TARGET_USER="${SUDO_USER:-${PKEXEC_UID:+$(getent passwd "$PKEXEC_UID" | cut -d: -f1)}}"
+    if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+      # Record what we changed so postrm only reverses our own additions.
+      mkdir -p /var/lib/sensor
+      for grp in input uinput; do
+        if ! id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+          adduser "$TARGET_USER" "$grp" >/dev/null 2>&1 || true
+          echo "$TARGET_USER $grp" >> /var/lib/sensor/added-groups
+        fi
+      done
+
+      cat <<MSG
+
+sensor is installed.
+
+  One step remains: log out and back in, so your new group membership
+  reaches your session. Then run
+
+      sensorctl setup
+
+  to download the speech model and start dictating.
+
+MSG
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

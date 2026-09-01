@@ -96,6 +96,24 @@ pub fn key_by_name(name: &str) -> Option<Key> {
         .find(|k| format!("{k:?}") == name)
 }
 
+/// `$XDG_DATA_HOME/<app>`, falling back to `~/.local/share`. Holds the
+/// downloaded model; `apt purge` removes it.
+pub fn data_dir() -> Result<PathBuf> {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => {
+            let home = std::env::var_os("HOME").context("neither XDG_DATA_HOME nor HOME is set")?;
+            PathBuf::from(home).join(".local").join("share")
+        }
+    };
+    Ok(base.join(APP_NAME))
+}
+
+/// Where the model is expected to live once fetched.
+pub fn default_model_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join(DEFAULT_MODEL))
+}
+
 /// `$XDG_CONFIG_HOME/<app>/config`, falling back to `~/.config`.
 pub fn config_path() -> Result<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {

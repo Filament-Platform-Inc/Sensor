@@ -1,0 +1,42 @@
+sensor for Debian/Ubuntu
+========================
+
+What installing this package changed
+------------------------------------
+
+  /usr/bin/sensord, /usr/bin/sensorctl      the binaries
+  /usr/lib/udev/rules.d/99-sensor.rules     device permissions
+  /usr/lib/modules-load.d/sensor.conf       loads the uinput module at boot
+  /usr/lib/systemd/user/sensord.service     the user service (not system)
+  /var/lib/sensor/added-groups              record of group changes, for removal
+
+It also created a system group 'uinput' if absent, and added the installing
+user to 'input' and 'uinput'. Both changes are recorded and reversed on
+removal; a group you were already in is left alone.
+
+After first login, `sensorctl setup` downloads the speech model to
+~/.local/share/sensor/. Settings live in ~/.config/sensor/config.
+
+Why device-level access is required
+-----------------------------------
+
+Wayland deliberately prevents applications from reading global keystrokes or
+synthesising input. There is no compositor-level API that works across GNOME,
+KDE and X11, so sensor reads the hotkey from /dev/input and types through
+/dev/uinput, below the compositor.
+
+The practical consequence is that the daemon can see every key you press.
+That is inherent to any global-hotkey tool on Linux, and the reasons to
+believe it is not abused are: the systemd unit sets PrivateNetwork=yes, so the
+process has no network namespace and cannot transmit anything; only events
+matching the configured hotkey are acted on, and none are logged; and the
+source is public.
+
+Removing
+--------
+
+  sudo apt remove sensor    binaries, rules, unit, and group changes
+  sudo apt purge sensor     the above, plus the model and per-user settings
+
+Neither leaves a daemon running. After removal, log out once for the group
+change to leave your session.
