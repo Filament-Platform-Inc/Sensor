@@ -52,8 +52,12 @@ case "$1" in
       cat <<MSG
 
 sensor is installed. Two steps remain:
-  1. Log out and back in, so your group membership reaches your session.
-  2. Run: sensorctl setup
+  1. Run: sensorctl setup
+     Downloads the speech model (~75MB) and enables the daemon.
+  2. Log out and back in.
+     Group membership is fixed when a session starts, so this session
+     cannot see the 'input' and 'uinput' groups you were just added to.
+     After logging back in, sensor is ready -- hold the hotkey and speak.
 
 MSG
     fi

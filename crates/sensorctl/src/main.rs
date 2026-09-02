@@ -85,8 +85,11 @@ fn setup() -> Result<()> {
 
     if !in_groups() {
         println!(
-            "\nOne step remains: log out and back in, so your 'input' and 'uinput'\n\
-             group membership reaches this session."
+            "\nOne step remains: log out and back in.\n\
+             \n\
+             Your group list is fixed when a session starts, so this session cannot\n\
+             see the 'input' and 'uinput' groups the installer added you to. After\n\
+             logging back in, hold the hotkey and speak."
         );
     } else {
         println!("\nReady. Hold the hotkey and speak.");
