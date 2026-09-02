@@ -12,13 +12,17 @@ RestartSec=2
 
 # The daemon reads every keystroke, so constrain what else it can reach.
 # It needs no network at all: transcription is entirely local.
+#
+# ProtectKernelModules is deliberately absent. It works by dropping
+# CAP_SYS_MODULE, and a --user manager is unprivileged, so the drop fails and
+# systemd aborts the unit with 218/CAPABILITIES before ExecStart runs. The
+# session never held that capability in the first place.
 PrivateNetwork=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
 ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
