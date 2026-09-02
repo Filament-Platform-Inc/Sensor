@@ -33,6 +33,10 @@ done
 install -Dm644 README.md "$STAGE/usr/share/doc/sensor/README.md"
 install -Dm644 packaging/debian/README.Debian \
   "$STAGE/usr/share/doc/sensor/README.Debian"
+# Debian policy: the license a package ships under belongs in the package,
+# not only in the repo it was built from.
+install -Dm644 packaging/debian/copyright \
+  "$STAGE/usr/share/doc/sensor/copyright"
 
 install -Dm644 packaging/debian/control "$STAGE/DEBIAN/control"
 for script in postinst postrm prerm; do

@@ -120,4 +120,4 @@ the raw text is typed so it never costs latency.
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE). Copyright 2026 Filament Platform Inc.

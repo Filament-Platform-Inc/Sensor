@@ -42,3 +42,14 @@ Removing
 
 Neither leaves a daemon running. After removal, log out once for the group
 change to leave your session.
+
+Reporting problems
+------------------
+
+Bug reports and questions go to the issue tracker, not to the maintainer
+address in this package:
+
+  https://github.com/Filament-Platform-Inc/Sensor/issues
+
+`sensorctl doctor` prints what is and is not working; its output is the most
+useful thing to include.
