@@ -93,7 +93,9 @@ sensorctl config    # show current settings
 sensorctl doctor    # check permissions, model, and daemon state
 ```
 
-Terminals use `Ctrl+Shift+V` rather than `Ctrl+V`. If pasting fails there, set
+Terminals paste with `Ctrl+Shift+V` rather than `Ctrl+V`, and Wayland gives no
+way to ask which window has focus, so sensor cannot switch automatically. Pick
+where you type under **Where you type** in the settings window, or set
 `paste_shift = true` in `~/.config/sensor/config`.
 
 ## Building from source

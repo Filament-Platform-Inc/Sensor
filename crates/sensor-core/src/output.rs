@@ -45,25 +45,25 @@ impl Injector {
 
     /// Put `text` in the focused window: stash the user's clipboard, paste, restore.
     ///
-    /// Both ends of this are races, and getting either wrong pastes the user's
-    /// previous clipboard instead of their words:
+    /// The clipboard is served for the whole attempt rather than for a single
+    /// paste. `--paste-once` looks right -- it stops the transcription lingering
+    /// -- but the check that it had been claimed was itself a `wl-paste`, and
+    /// that read *was* the one paste. The server exited before the focused app
+    /// ever saw the chord, and the wait below then found an already-dead process
+    /// and called it a success, so every failure looked like a win. Verifying a
+    /// one-shot serve by reading it always spends it.
     ///
-    /// * Sending the chord before `wl-copy` has claimed the selection makes the
-    ///   app paste whatever was there before. So we wait for the clipboard to
-    ///   actually read back as our text rather than assuming the spawn took.
-    /// * Restoring the old contents the instant `wl-copy` exits is too early:
-    ///   it exits when the app *requests* the data, which is before the app has
-    ///   finished reading it. So we settle briefly after that.
-    ///
-    /// Sleeping a guessed interval instead is why this bug recurs across the
-    /// category (OpenWhispr#240).
+    /// Restoring is still a race at the far end: `wl-copy` learns the data was
+    /// requested, not that the app finished reading it, so we settle before
+    /// putting the old contents back.
     pub fn paste(&mut self, text: &str, chord: PasteChord) -> Result<()> {
         let saved = clipboard_get();
 
-        let mut server = spawn_paste_once(text)?;
+        let mut server = spawn_clipboard_server(text)?;
 
         // Do not paste until the clipboard actually holds our text, or we race
-        // the compositor and the app pastes the previous contents.
+        // the compositor and the app pastes the previous contents. Reading it
+        // back is safe now that the server is not one-shot.
         if !wait_for_clipboard(text, CLIPBOARD_CLAIM_TIMEOUT) {
             let _ = server.kill();
             let _ = server.wait();
@@ -79,28 +79,19 @@ impl Injector {
 
         self.send_chord(chord)?;
 
-        // Bounded wait: if the focused app never pastes (wrong chord for a
-        // terminal, say) we must not hang, and must still restore.
-        let consumed = wait_with_timeout(&mut server, PASTE_TIMEOUT)?;
-        if !consumed {
-            let _ = server.kill();
-            let _ = server.wait();
-            // The app never took it, so keep the words reachable rather than
-            // restoring over them. Same reasoning as the claim timeout above.
-            let _ = clipboard_set(text);
-            return Err(anyhow!(
-                "the focused window did not accept a paste within {PASTE_TIMEOUT:?}, \
-                 so the text was left on your clipboard — press Ctrl+V to insert it \
-                 (a terminal may need Ctrl+Shift+V)"
-            ));
-        }
-
-        // wl-copy exits on the data *request*; the app still has to read it.
-        // Restoring immediately can truncate that read.
+        // The app reads the selection asynchronously, and nothing tells us when
+        // it is done. Hold the text there long enough for that read to land
+        // before restoring over it.
         thread::sleep(PASTE_SETTLE);
 
-        if let Some(prev) = saved {
-            clipboard_set(&prev)?;
+        let _ = server.kill();
+        let _ = server.wait();
+
+        match saved {
+            Some(prev) => clipboard_set(&prev)?,
+            // There was nothing to restore, and killing the server leaves the
+            // selection unowned. Put the words back so they are still reachable.
+            None => clipboard_set(text)?,
         }
         Ok(())
     }
@@ -125,9 +116,6 @@ impl Injector {
     }
 }
 
-/// How long to wait for the focused app to take the clipboard before giving up.
-const PASTE_TIMEOUT: Duration = Duration::from_millis(600);
-
 /// How long to wait for `wl-copy` to actually claim the selection.
 ///
 /// Claiming takes ~60ms typically, but contention pushes it well past that,
@@ -135,10 +123,13 @@ const PASTE_TIMEOUT: Duration = Duration::from_millis(600);
 /// than a slow paste. So the budget is generous.
 const CLIPBOARD_CLAIM_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Grace period between the app requesting the data and having read it.
-/// Short enough to stay inside the latency budget, long enough for a local
-/// pipe read to complete.
-const PASTE_SETTLE: Duration = Duration::from_millis(40);
+/// How long the text stays on the clipboard after the chord is sent.
+///
+/// This is the whole window the focused app has to notice the keystroke and
+/// read the selection, so it is far longer than the old 40ms grace period,
+/// which only had to cover a pipe read. Terminals and Electron apps are well
+/// past 40ms. It costs nothing perceptible: the text is already on screen.
+const PASTE_SETTLE: Duration = Duration::from_millis(400);
 
 /// Polls the clipboard until it reads back as `text`.
 ///
@@ -164,10 +155,10 @@ fn wait_for_clipboard(text: &str, limit: Duration) -> bool {
     false
 }
 
-/// Serve `text` on the clipboard for exactly one paste, then exit.
-fn spawn_paste_once(text: &str) -> Result<std::process::Child> {
+/// Serve `text` on the clipboard until we kill the server.
+fn spawn_clipboard_server(text: &str) -> Result<std::process::Child> {
     let mut child = Command::new("wl-copy")
-        .args(["--paste-once", "--foreground"])
+        .args(["--foreground"])
         .stdin(Stdio::piped())
         .spawn()
         .context("running wl-copy — is wl-clipboard installed?")?;
@@ -177,18 +168,6 @@ fn spawn_paste_once(text: &str) -> Result<std::process::Child> {
         .expect("stdin was piped")
         .write_all(text.as_bytes())?;
     Ok(child)
-}
-
-/// Poll for the child to exit. Returns whether it exited within `limit`.
-fn wait_with_timeout(child: &mut std::process::Child, limit: Duration) -> Result<bool> {
-    let deadline = std::time::Instant::now() + limit;
-    while std::time::Instant::now() < deadline {
-        if child.try_wait()?.is_some() {
-            return Ok(true);
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    Ok(false)
 }
 
 fn clipboard_get() -> Option<String> {
@@ -210,4 +189,27 @@ fn clipboard_set(text: &str) -> Result<()> {
         .write_all(text.as_bytes())?;
     child.wait()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// `--paste-once` serves the selection exactly once, and the claim check is
+    /// itself a read -- so it spent the one paste and the focused app got
+    /// nothing, while the dead server read as success. It logged no errors for
+    /// weeks. Nothing else in the file would fail if it came back, so assert on
+    /// the source directly.
+    #[test]
+    fn clipboard_is_not_served_one_shot() {
+        let src = include_str!("output.rs");
+        // Built at runtime so this test's own text is not a match.
+        let flag = format!("--{}-once", "paste");
+        let uses = src
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                l.contains(&flag) && !t.starts_with("///") && !t.starts_with("//")
+            })
+            .count();
+        assert_eq!(uses, 0, "one-shot serve is consumed by our own claim check");
+    }
 }
