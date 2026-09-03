@@ -31,6 +31,23 @@ case "$1" in
       update-desktop-database -q /usr/share/applications 2>/dev/null || true
     fi
 
+    # On an upgrade dpkg passes the old version as $2. prerm stopped the
+    # daemon so its binary could be replaced, and nothing else starts it
+    # again -- so without this an upgrade lands the user in a stopped daemon
+    # that looks exactly like a broken install. Groups, config and model are
+    # all still in place, so there is nothing else to redo and nothing to
+    # tell them about.
+    if [ -n "${2:-}" ]; then
+      for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
+        # Only restart what was already enabled: starting it for someone who
+        # had deliberately disabled it would override their choice.
+        if systemctl --user --machine="$uid@" is-enabled sensord.service >/dev/null 2>&1; then
+          systemctl --user --machine="$uid@" start sensord.service 2>/dev/null || true
+        fi
+      done
+      exit 0
+    fi
+
     # Add the installing user -- SUDO_USER is who ran sudo, not root.
     TARGET_USER="${SUDO_USER:-${PKEXEC_UID:+$(getent passwd "$PKEXEC_UID" | cut -d: -f1)}}"
     if [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
