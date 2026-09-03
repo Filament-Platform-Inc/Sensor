@@ -7,7 +7,9 @@
 # only that the packaging does and undoes exactly what it claims.
 set -uo pipefail
 
-DEB="${1:-dist/sensor_0.1.0_amd64.deb}"
+# Default to the package just built, rather than a version pinned here that
+# goes stale on every bump and silently tests the wrong artefact.
+DEB="${1:-$(ls -t dist/sensor_*_amd64.deb 2>/dev/null | head -1)}"
 IMAGE="ubuntu:24.04"
 DOCKER="${DOCKER:-docker}"
 
