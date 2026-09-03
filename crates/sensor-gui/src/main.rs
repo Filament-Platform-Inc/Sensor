@@ -107,6 +107,7 @@ fn build_window(app: &gtk::Application) {
     root.append(&status.widget);
     root.append(&hotkey_section(Rc::clone(&cfg)));
     root.append(&microphone_section(Rc::clone(&cfg)));
+    root.append(&paste_section(Rc::clone(&cfg)));
     root.append(&model_section(Rc::clone(&cfg)));
     let recent = recent_section();
     root.append(&recent.widget);
@@ -385,6 +386,46 @@ fn model_section(cfg: Rc<RefCell<Config>>) -> gtk::Box {
     b
 }
 
+// --- paste style ----------------------------------------------------------
+
+/// Terminals paste with Ctrl+Shift+V; everything else uses Ctrl+V. Wayland
+/// gives no way to ask what window has focus, so this cannot be automatic --
+/// but leaving it to a config file meant terminal users had no way to find it,
+/// which read as "pasting is broken" rather than "there is a setting".
+fn paste_section(cfg: Rc<RefCell<Config>>) -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    b.append(&section_label("Where you type"));
+
+    const CHOICES: [&str; 2] = ["Normal apps (Ctrl+V)", "Terminals (Ctrl+Shift+V)"];
+    let dropdown = gtk::DropDown::from_strings(&CHOICES);
+    dropdown.set_selected(u32::from(cfg.borrow().paste_shift));
+
+    let note = muted(
+        "Terminals treat Ctrl+V as something else, so they need the other \
+         setting. Switch this if the text does not appear where you speak.",
+    );
+
+    let note2 = note.clone();
+    dropdown.connect_selected_notify(move |d| {
+        let shift = d.selected() == 1;
+        match save_setting("paste_shift", if shift { "true" } else { "false" }) {
+            Ok(()) => {
+                cfg.borrow_mut().paste_shift = shift;
+                note2.set_text(&if service::restart().is_ok() {
+                    "Saved.".to_string()
+                } else {
+                    "Saved. Restart sensor for it to take effect.".to_string()
+                });
+            }
+            Err(e) => note2.set_text(&format!("Could not save: {e:#}")),
+        }
+    });
+
+    b.append(&dropdown);
+    b.append(&note);
+    b
+}
+
 // --- recent ---------------------------------------------------------------
 
 struct RecentSection {
@@ -427,13 +468,46 @@ impl RecentSection {
             .unwrap_or_default();
         self.empty.set_visible(recent.is_empty());
         for line in recent {
-            let l = gtk::Label::new(Some(&format!("“{line}”")));
-            l.add_css_class("recent");
-            l.set_xalign(0.0);
-            l.set_wrap(true);
-            self.list.append(&l);
+            self.list.append(&recent_row(&line));
         }
     }
+}
+
+/// One transcription, with a way to get it back out.
+///
+/// Selectable *and* given a button: dragging to select a wrapped label is
+/// fiddly, and the text the user is looking at is the text they just spoke,
+/// so taking it should be one click rather than a careful drag.
+fn recent_row(line: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+
+    let l = gtk::Label::new(Some(&format!("“{line}”")));
+    l.add_css_class("recent");
+    l.set_xalign(0.0);
+    l.set_wrap(true);
+    l.set_hexpand(true);
+    l.set_selectable(true);
+    // A selectable label takes focus on click and shows a caret; starting
+    // unfocused keeps the list reading as text rather than as a form.
+    l.set_can_focus(false);
+
+    let copy = gtk::Button::from_icon_name("edit-copy-symbolic");
+    copy.set_tooltip_text(Some("Copy this text"));
+    copy.add_css_class("flat");
+    copy.set_valign(gtk::Align::Start);
+
+    let text = line.to_string();
+    copy.connect_clicked(move |btn| {
+        if let Some(display) = gdk::Display::default() {
+            display.clipboard().set_text(&text);
+            btn.set_tooltip_text(Some("Copied"));
+            btn.set_icon_name("object-select-symbolic");
+        }
+    });
+
+    row.append(&l);
+    row.append(&copy);
+    row
 }
 
 // --- delete ---------------------------------------------------------------
